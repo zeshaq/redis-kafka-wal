@@ -31,11 +31,19 @@ const ls = {
   set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
 };
 
+// Token resolution order:
+//   1. user-pasted admin token in localStorage (`api_token`)
+//   2. public lab token fetched from /api/config and held in memory
+let publicToken = "";
+
 const settings = {
   apiBase:  () => (ls.get("api_base", "") || guessApiBase()).replace(/\/+$/, ""),
-  token:    () => ls.get("api_token", ""),
-  region:   () => ls.get("live_region", randomRegion()),
-  name:     () => ls.get("live_name", "Anonymous"),
+  // adminToken returns only the user-pasted one (used for sim controls etc).
+  adminToken: () => ls.get("api_token", ""),
+  // writeToken returns the best available token for produce; admin paste wins.
+  writeToken: () => ls.get("api_token", "") || publicToken,
+  region:   () => ls.get("live_region", ""),
+  name:     () => ls.get("live_name", ""),
   session:  () => {
     let s = ls.get("live_session", "");
     if (!s) {
@@ -81,10 +89,19 @@ function toast(msg, ms = 3000) {
 
 // --- API helpers ---------------------------------------------------------
 
+async function fetchConfig() {
+  try {
+    const resp = await fetch(`${settings.apiBase()}/api/config`, { cache: "no-store" });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.publicToken) publicToken = data.publicToken;
+  } catch { /* ignore — produce will surface the auth error */ }
+}
+
 async function produce(body) {
-  const token = settings.token();
+  const token = settings.writeToken();
   if (!token) {
-    toast("set bearer token in settings to write");
+    toast("public token unavailable — open settings to paste an admin token");
     return false;
   }
   try {
@@ -342,13 +359,62 @@ function setupSettings() {
     const newRegion = $("#region-select").value;
     if (newRegion !== settings.region()) {
       ls.set("live_region", newRegion);
-      // Re-join attendees on the new region
       heartbeat();
     }
     $("#settings-panel").classList.add("hidden");
     renderRegionPill();
     refresh();
   });
+  $("#settings-rejoin").addEventListener("click", () => {
+    if (!confirm("Leave the event? You'll be asked for a name + region again.")) return;
+    localStorage.removeItem("live_name");
+    localStorage.removeItem("live_region");
+    location.reload();
+  });
+}
+
+// --- Join modal ----------------------------------------------------------
+
+const FUNNY_ADJECTIVES = ["Curious","Clever","Sleepy","Snappy","Quirky","Quiet","Brisk","Bold","Lucky","Witty","Mellow","Spirited"];
+const FUNNY_NOUNS = ["Penguin","Otter","Falcon","Panda","Lemur","Squirrel","Kestrel","Beaver","Capybara","Heron","Wombat","Quokka"];
+function suggestName() {
+  const a = FUNNY_ADJECTIVES[Math.floor(Math.random() * FUNNY_ADJECTIVES.length)];
+  const n = FUNNY_NOUNS[Math.floor(Math.random() * FUNNY_NOUNS.length)];
+  return `${a} ${n}`;
+}
+
+function detectRegion() {
+  // Best-effort: hint from browser locale, then random.
+  const lang = (navigator.language || "").toLowerCase();
+  if (/^(en-us|en-ca|es-mx|es-419|pt-br)/.test(lang)) return "us";
+  if (/^(en-gb|fr|de|es|it|nl|pt-pt|pl|ru|sv|no|da|fi|tr)/.test(lang)) return "eu";
+  if (/^(ja|ko|zh|hi|th|vi|id|ms)/.test(lang)) return "ap";
+  return ["us","eu","ap"][Math.floor(Math.random() * 3)];
+}
+
+function showJoinModal() {
+  const modal = $("#join-modal");
+  const nameInput = $("#join-name");
+  nameInput.value = suggestName();
+
+  const guess = detectRegion();
+  const radio = document.querySelector(`input[name="join-region"][value="${guess}"]`);
+  if (radio) radio.checked = true;
+
+  modal.hidden = false;
+  setTimeout(() => nameInput.focus(), 50);
+
+  $("#join-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = nameInput.value.trim() || suggestName();
+    const region = (document.querySelector('input[name="join-region"]:checked') || {}).value || guess;
+    ls.set("live_name", name);
+    ls.set("live_region", region);
+    modal.hidden = true;
+    renderRegionPill();
+    setupHeartbeat();
+    refresh();
+  }, { once: true });
 }
 
 // --- Attendees heartbeat -------------------------------------------------
@@ -389,10 +455,24 @@ async function loop() {
   setTimeout(loop, POLL_MS);
 }
 
-setupSettings();
-setupReactions();
-setupQA();
-setupPoll();
-renderRegionPill();
-setupHeartbeat();
-loop();
+async function bootstrap() {
+  await fetchConfig();             // populate publicToken if available
+  setupSettings();
+  setupReactions();
+  setupQA();
+  setupPoll();
+
+  // First-visit users see the join modal; everyone else proceeds.
+  const hasIdentity = settings.name() && settings.region();
+  if (!hasIdentity) {
+    showJoinModal();
+  } else {
+    renderRegionPill();
+    setupHeartbeat();
+  }
+  // Start the polling loop either way (modal is non-blocking; loop renders
+  // the read-only state under the modal so the page isn't blank).
+  loop();
+}
+
+bootstrap();

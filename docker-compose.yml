@@ -324,6 +324,7 @@ services:
       LISTEN: ":8080"
       SR_URL: "http://schema-registry:8081"
       BRIDGE_WRITE_TOKEN: "${BRIDGE_WRITE_TOKEN:-}"
+      BRIDGE_PUBLIC_TOKEN: "${BRIDGE_PUBLIC_TOKEN:-}"
       ALLOW_ORIGIN: "${BRIDGE_ALLOW_ORIGIN:-*}"
     # 8080 is reachable by `cloudflared` over the internal network.
     # Mapping to host:18080 too, for local debugging without the tunnel.

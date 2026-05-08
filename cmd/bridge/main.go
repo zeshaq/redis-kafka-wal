@@ -1,14 +1,16 @@
 // bridge is an HTTP service that exposes the lab's live state to a web UI.
 //
+//   GET  /api/config                          public lab config (publicToken if set)
 //   GET  /api/health                          liveness
 //   GET  /api/regions/:region/state           snapshot of demo keys
 //   GET  /api/regions/:region/key/:key?type=<type>   single-key inspector
 //   GET  /api/events                          SSE: every event observed on every region's Kafka
-//   POST /api/produce                         produce an op (Bearer token required)
+//   GET  /api/event-state?region=:r           live-event app state aggregator
+//   POST /api/produce                         produce an op (Bearer token: write OR public)
 //   GET  /api/sim                             traffic simulator status
-//   POST /api/sim/start                       start simulator (Bearer token; body: {rate})
-//   POST /api/sim/stop                        stop simulator (Bearer token)
-//   POST /api/sim/rate                        change rate while running (Bearer token; body: {rate})
+//   POST /api/sim/start                       start simulator (admin Bearer token; body: {rate})
+//   POST /api/sim/stop                        stop simulator (admin Bearer token)
+//   POST /api/sim/rate                        change rate while running (admin Bearer token; body: {rate})
 //
 // The bridge runs three independent Kafka consumers, one per region's local
 // cluster. Each event flows through the broadcaster annotated with which
@@ -43,7 +45,8 @@ import (
 type config struct {
 	listen      string
 	srURL       string
-	writeToken  string
+	writeToken  string // admin: required for sim control, accepted for produce
+	publicToken string // public lab token: accepted for produce only; exposed via /api/config
 	allowOrigin string
 	regions     map[string]regionCfg
 }
@@ -58,6 +61,7 @@ func loadConfig() config {
 		listen:      envOr("LISTEN", ":8080"),
 		srURL:       envOr("SR_URL", "http://schema-registry:8081"),
 		writeToken:  os.Getenv("BRIDGE_WRITE_TOKEN"),
+		publicToken: os.Getenv("BRIDGE_PUBLIC_TOKEN"),
 		allowOrigin: envOr("ALLOW_ORIGIN", "*"),
 		regions: map[string]regionCfg{
 			"us": {bootstrap: envOr("KAFKA_US", "kafka-us:29092"), redisAddr: envOr("REDIS_US", "redis-us:6379")},
@@ -271,6 +275,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.URL.Path == "/api/config":
+		s.config(w, r)
 	case r.URL.Path == "/api/health":
 		s.health(w, r)
 	case r.URL.Path == "/api/events":
@@ -286,6 +292,20 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// config exposes the public lab token (if BRIDGE_PUBLIC_TOKEN is set) so
+// the live-event page can write reactions/votes without an admin paste.
+// Anyone who can reach the bridge can fetch this token; for production,
+// gate /live behind Cloudflare Access and don't set BRIDGE_PUBLIC_TOKEN.
+func (s *server) config(w http.ResponseWriter, _ *http.Request) {
+	out := map[string]any{
+		"regions": []string{"us", "eu", "ap"},
+	}
+	if s.cfg.publicToken != "" {
+		out["publicToken"] = s.cfg.publicToken
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) cors(w http.ResponseWriter, r *http.Request) {
@@ -622,7 +642,7 @@ func (s *server) doProduce(ctx context.Context, body produceReq) (*produceRes, e
 
 // /api/produce: takes a JSON body describing a write op.
 func (s *server) produce(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(r) {
+	if !s.authorizedWrite(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -654,8 +674,27 @@ func (s *server) produce(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *server) authorized(r *http.Request) bool {
-	if s.cfg.writeToken == "" {
+// authorizedAdmin returns true only for the admin write token. Used to
+// gate destructive / lab-control actions like the simulator endpoints.
+func (s *server) authorizedAdmin(r *http.Request) bool {
+	return s.checkToken(r, s.cfg.writeToken)
+}
+
+// authorizedWrite returns true for either the admin write token OR the
+// public lab token. Used to gate /api/produce so the public live-event
+// page can submit reactions/votes without an admin token paste.
+func (s *server) authorizedWrite(r *http.Request) bool {
+	if s.checkToken(r, s.cfg.writeToken) {
+		return true
+	}
+	if s.cfg.publicToken != "" && s.checkToken(r, s.cfg.publicToken) {
+		return true
+	}
+	return false
+}
+
+func (s *server) checkToken(r *http.Request, expected string) bool {
+	if expected == "" {
 		return false
 	}
 	auth := r.Header.Get("Authorization")
@@ -663,7 +702,7 @@ func (s *server) authorized(r *http.Request) bool {
 	if !strings.HasPrefix(auth, p) {
 		return false
 	}
-	return subtleEq(auth[len(p):], s.cfg.writeToken)
+	return subtleEq(auth[len(p):], expected)
 }
 
 // /api/sim                 GET  status
@@ -683,7 +722,7 @@ func (s *server) simRoute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !s.authorized(r) {
+		if !s.authorizedAdmin(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -705,7 +744,7 @@ func (s *server) simRoute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !s.authorized(r) {
+		if !s.authorizedAdmin(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -719,7 +758,7 @@ func (s *server) simRoute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !s.authorized(r) {
+		if !s.authorizedAdmin(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

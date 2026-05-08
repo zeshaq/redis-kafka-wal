@@ -37,16 +37,54 @@
       </select>
     </label>
     <label>
-      Bearer token (write ops)
-      <input id="api-token" type="password" placeholder="required to react / vote / ask" />
+      Bearer token (admin override; sim controls)
+      <input id="api-token" type="password" placeholder="empty = use public lab token" />
     </label>
     <label>
       API base URL
       <input id="api-base" type="text" placeholder="https://redis-kafka-wal-api.zeteq.com" />
     </label>
     <button id="settings-save" type="button">save</button>
-    <p class="hint">Token + name persist in your browser. Open this URL in three tabs with three different regions to see eventual consistency.</p>
+    <button id="settings-rejoin" type="button" class="link-btn">leave event</button>
+    <p class="hint">Public lab token is fetched automatically. Paste an admin token only if you need to control the simulator from this page.</p>
   </section>
+
+  <div id="join-modal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <h2>Join the live event</h2>
+      <p class="modal-desc">
+        You'll join as one of three virtual regions. Open this URL in
+        three tabs and pick a different region in each to watch
+        eventual consistency play out across the world.
+      </p>
+      <form id="join-form">
+        <label>
+          Display name
+          <input id="join-name" type="text" maxlength="40" autocomplete="off" required />
+        </label>
+        <fieldset class="region-radios">
+          <legend>Pick a region</legend>
+          <label class="region-radio" data-region="us">
+            <input type="radio" name="join-region" value="us" />
+            <span class="region-radio-dot"></span>
+            <span class="region-radio-label">US <em>· Americas</em></span>
+          </label>
+          <label class="region-radio" data-region="eu">
+            <input type="radio" name="join-region" value="eu" />
+            <span class="region-radio-dot"></span>
+            <span class="region-radio-label">EU <em>· Europe</em></span>
+          </label>
+          <label class="region-radio" data-region="ap">
+            <input type="radio" name="join-region" value="ap" />
+            <span class="region-radio-dot"></span>
+            <span class="region-radio-label">AP <em>· Asia-Pacific</em></span>
+          </label>
+        </fieldset>
+        <button type="submit" class="join-btn">Join event</button>
+      </form>
+    </div>
+  </div>
 
   <main class="live-main">
 
