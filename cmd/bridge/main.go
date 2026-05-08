@@ -5,6 +5,10 @@
 //   GET  /api/regions/:region/key/:key?type=<type>   single-key inspector
 //   GET  /api/events                          SSE: every event observed on every region's Kafka
 //   POST /api/produce                         produce an op (Bearer token required)
+//   GET  /api/sim                             traffic simulator status
+//   POST /api/sim/start                       start simulator (Bearer token; body: {rate})
+//   POST /api/sim/stop                        stop simulator (Bearer token)
+//   POST /api/sim/rate                        change rate while running (Bearer token; body: {rate})
 //
 // The bridge runs three independent Kafka consumers, one per region's local
 // cluster. Each event flows through the broadcaster annotated with which
@@ -129,7 +133,7 @@ func main() {
 		go runConsumer(ctx, name, rc.bootstrap, codec, bc)
 	}
 
-	srv := newServer(cfg, codec, clocks, producers, rdb, bc)
+	srv := newServer(ctx, cfg, codec, clocks, producers, rdb, bc)
 	httpSrv := &http.Server{Addr: cfg.listen, Handler: srv}
 
 	go func() {
@@ -246,16 +250,18 @@ func (b *broadcaster) publish(e observedEvent) {
 // --- HTTP server --------------------------------------------------------
 
 type server struct {
+	ctx       context.Context // parent ctx for long-running spawned goroutines (e.g. simulator)
 	cfg       config
 	codec     *event.Codec
 	clocks    map[string]*hlc.Clock
 	producers map[string]*kgo.Client
 	rdb       map[string]*redis.Client
 	bc        *broadcaster
+	sim       *simManager
 }
 
-func newServer(cfg config, codec *event.Codec, clocks map[string]*hlc.Clock, producers map[string]*kgo.Client, rdb map[string]*redis.Client, bc *broadcaster) *server {
-	return &server{cfg: cfg, codec: codec, clocks: clocks, producers: producers, rdb: rdb, bc: bc}
+func newServer(ctx context.Context, cfg config, codec *event.Codec, clocks map[string]*hlc.Clock, producers map[string]*kgo.Client, rdb map[string]*redis.Client, bc *broadcaster) *server {
+	return &server{ctx: ctx, cfg: cfg, codec: codec, clocks: clocks, producers: producers, rdb: rdb, bc: bc, sim: &simManager{}}
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +277,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.events(w, r)
 	case r.URL.Path == "/api/produce" && r.Method == http.MethodPost:
 		s.produce(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/sim"):
+		s.simRoute(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/regions/"):
 		s.regionRoute(w, r)
 	default:
@@ -495,54 +503,47 @@ func payloadSummary(e *event.Event) any {
 	return nil
 }
 
-// /api/produce: takes a JSON body describing a write op.
-//
-// Body shape:
-//
-//	{
-//	  "region": "us",
-//	  "op": "SET",
-//	  "key": "...",
-//	  "value": "...",            // SET
-//	  "ttl_ms": 0,               // SET (0 = none)
-//	  "delta": 1,                // INCR
-//	  "member": "...",           // SADD/SREM/ZADD
-//	  "score": 1.5,              // ZADD
-//	  "fields": {"k": "v", ...}  // XADD
-//	}
-func (s *server) produce(w http.ResponseWriter, r *http.Request) {
-	if !s.authorized(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	var body struct {
-		Region string            `json:"region"`
-		Op     string            `json:"op"`
-		Key    string            `json:"key"`
-		Value  string            `json:"value,omitempty"`
-		TTLMs  int64             `json:"ttl_ms,omitempty"`
-		Delta  int64             `json:"delta,omitempty"`
-		Member string            `json:"member,omitempty"`
-		Score  float64           `json:"score,omitempty"`
-		Fields map[string]string `json:"fields,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
+// produceReq is the JSON body shape for /api/produce and the in-process
+// type the simulator uses to talk to doProduce.
+type produceReq struct {
+	Region string            `json:"region"`
+	Op     string            `json:"op"`
+	Key    string            `json:"key"`
+	Value  string            `json:"value,omitempty"`
+	TTLMs  int64             `json:"ttl_ms,omitempty"`
+	Delta  int64             `json:"delta,omitempty"`
+	Member string            `json:"member,omitempty"`
+	Score  float64           `json:"score,omitempty"`
+	Fields map[string]string `json:"fields,omitempty"`
+}
+
+type produceRes struct {
+	EventID   string  `json:"event_id"`
+	Topic     string  `json:"topic"`
+	Partition int32   `json:"partition"`
+	Offset    int64   `json:"offset"`
+	HLC       hlcView `json:"hlc"`
+}
+
+type hlcView struct {
+	Phys    int64  `json:"phys"`
+	Logical int32  `json:"logical"`
+	Region  string `json:"region"`
+}
+
+// doProduce builds the event, encodes it, and produces to Kafka. Shared
+// between the HTTP handler and the in-bridge traffic simulator.
+func (s *server) doProduce(ctx context.Context, body produceReq) (*produceRes, error) {
 	clock, ok := s.clocks[body.Region]
 	if !ok {
-		http.Error(w, "unknown region", http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("unknown region %q", body.Region)
 	}
 	prod, ok := s.producers[body.Region]
 	if !ok {
-		http.Error(w, "no producer for region", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("no producer for region %q", body.Region)
 	}
 	if body.Key == "" {
-		http.Error(w, "key required", http.StatusBadRequest)
-		return
+		return nil, errors.New("key required")
 	}
 
 	ts := clock.Tick()
@@ -572,62 +573,82 @@ func (s *server) produce(w http.ResponseWriter, r *http.Request) {
 		e.Incr = &event.IncrVal{Delta: delta, Seq: seq}
 	case event.OpSADD:
 		if body.Member == "" {
-			http.Error(w, "member required", http.StatusBadRequest)
-			return
+			return nil, errors.New("member required")
 		}
 		e.SAdd = &event.SAddVal{Member: body.Member}
 	case event.OpSREM:
 		if body.Member == "" {
-			http.Error(w, "member required", http.StatusBadRequest)
-			return
+			return nil, errors.New("member required")
 		}
 		e.SRem = &event.SRemVal{Member: body.Member}
 	case event.OpZADD:
 		if body.Member == "" {
-			http.Error(w, "member required", http.StatusBadRequest)
-			return
+			return nil, errors.New("member required")
 		}
 		e.ZAdd = &event.ZAddVal{Member: body.Member, Score: body.Score}
 	case event.OpXADD:
 		if len(body.Fields) == 0 {
-			http.Error(w, "fields required", http.StatusBadRequest)
-			return
+			return nil, errors.New("fields required")
 		}
 		e.XAdd = &event.XAddVal{Fields: body.Fields}
 	default:
-		http.Error(w, "unknown op", http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("unknown op %q", body.Op)
 	}
 
 	encoded, err := s.codec.Encode(e)
 	if err != nil {
-		http.Error(w, "encode: "+err.Error(), http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("encode: %w", err)
 	}
 	topic := body.Region + ".events"
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	res := prod.ProduceSync(ctx, &kgo.Record{
+	r := prod.ProduceSync(ctx, &kgo.Record{
 		Key:   e.PartitionKey(),
 		Value: encoded,
 		Topic: topic,
 	})
-	if err := res.FirstErr(); err != nil {
-		http.Error(w, "produce: "+err.Error(), http.StatusBadGateway)
+	if err := r.FirstErr(); err != nil {
+		return nil, fmt.Errorf("produce: %w", err)
+	}
+	rec := r[0].Record
+	return &produceRes{
+		EventID:   e.EventID,
+		Topic:     rec.Topic,
+		Partition: rec.Partition,
+		Offset:    rec.Offset,
+		HLC:       hlcView{Phys: e.HLC.PhysicalMs, Logical: e.HLC.Logical, Region: e.HLC.Region},
+	}, nil
+}
+
+// /api/produce: takes a JSON body describing a write op.
+func (s *server) produce(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	rec := res[0].Record
+	var body produceReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	res, err := s.doProduce(ctx, body)
+	if err != nil {
+		// Lab-grade error mapping: produce failures are upstream issues,
+		// everything else looks like client error from the request body.
+		status := http.StatusBadRequest
+		if strings.HasPrefix(err.Error(), "produce:") || strings.HasPrefix(err.Error(), "encode:") {
+			status = http.StatusBadGateway
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":            true,
-		"event_id":      e.EventID,
-		"topic":         rec.Topic,
-		"partition":     rec.Partition,
-		"offset":        rec.Offset,
-		"hlc": map[string]any{
-			"phys":    e.HLC.PhysicalMs,
-			"logical": e.HLC.Logical,
-			"region":  e.HLC.Region,
-		},
+		"ok":        true,
+		"event_id":  res.EventID,
+		"topic":     res.Topic,
+		"partition": res.Partition,
+		"offset":    res.Offset,
+		"hlc":       res.HLC,
 	})
 }
 
@@ -641,6 +662,81 @@ func (s *server) authorized(r *http.Request) bool {
 		return false
 	}
 	return subtleEq(auth[len(p):], s.cfg.writeToken)
+}
+
+// /api/sim                 GET  status
+// /api/sim/start           POST {rate} -> start
+// /api/sim/stop            POST -> stop
+// /api/sim/rate            POST {rate} -> change rate while running
+func (s *server) simRoute(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/api/sim":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.sim.state())
+	case "/api/sim/start":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorized(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Rate int `json:"rate"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Rate < 1 || body.Rate > 50 {
+			http.Error(w, "rate must be 1..50", http.StatusBadRequest)
+			return
+		}
+		if !s.sim.start(s.ctx, body.Rate, s.runSim) {
+			http.Error(w, "already running", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.sim.state())
+	case "/api/sim/stop":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorized(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !s.sim.stop() {
+			http.Error(w, "not running", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.sim.state())
+	case "/api/sim/rate":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !s.authorized(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Rate int `json:"rate"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Rate < 1 || body.Rate > 50 {
+			http.Error(w, "rate must be 1..50", http.StatusBadRequest)
+			return
+		}
+		if !s.sim.updateRate(body.Rate) {
+			http.Error(w, "not running", http.StatusConflict)
+			return
+		}
+		writeJSON(w, http.StatusOK, s.sim.state())
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 // --- helpers ------------------------------------------------------------

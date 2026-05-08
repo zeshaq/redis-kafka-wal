@@ -365,13 +365,127 @@ function setupClearLog() {
   });
 }
 
+// --- traffic simulator ---------------------------------------------------
+
+let simState = { running: false, rate: 5, produced: 0, uptime_s: 0 };
+let simRateDirty = false; // user changed rate while running; need PATCH
+
+async function refreshSim() {
+  try {
+    const resp = await fetch(`${settings.apiBase()}/api/sim`, { cache: "no-store" });
+    if (resp.ok) {
+      simState = await resp.json();
+      renderSim();
+    }
+  } catch { /* ignore — refreshes again next tick */ }
+}
+
+function renderSim() {
+  const status = $("#sim-status");
+  const btn = $("#sim-toggle");
+  const stats = $("#sim-stats-text");
+  const rateInput = $("#sim-rate");
+
+  if (simState.running) {
+    status.textContent = `running · ${simState.rate}/sec`;
+    status.classList.remove("sim-off");
+    status.classList.add("sim-on");
+    btn.textContent = "stop";
+    btn.classList.add("running");
+    const rps = simState.uptime_s > 0
+      ? (simState.produced / simState.uptime_s).toFixed(1)
+      : "—";
+    stats.textContent = `produced ${simState.produced} events · uptime ${simState.uptime_s}s · observed ${rps}/sec`;
+  } else {
+    status.textContent = "off";
+    status.classList.remove("sim-on");
+    status.classList.add("sim-off");
+    btn.textContent = "start";
+    btn.classList.remove("running");
+    stats.textContent = "stopped";
+  }
+
+  // Don't stomp on the user's rate edit; only sync when not focused.
+  if (document.activeElement !== rateInput && !simRateDirty) {
+    rateInput.value = simState.rate;
+  }
+}
+
+async function toggleSim() {
+  if (!settings.token()) {
+    flashSimError("set a bearer token in settings first");
+    return;
+  }
+  const rate = Math.max(1, Math.min(50, Number($("#sim-rate").value) || 5));
+  const path = simState.running ? "/api/sim/stop" : "/api/sim/start";
+  try {
+    const resp = await fetch(`${settings.apiBase()}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${settings.token()}`,
+      },
+      body: simState.running ? null : JSON.stringify({ rate }),
+    });
+    if (!resp.ok) {
+      flashSimError(`${resp.status} ${await resp.text()}`);
+      return;
+    }
+    simState = await resp.json();
+    simRateDirty = false;
+    renderSim();
+  } catch (e) {
+    flashSimError(`network: ${e.message}`);
+  }
+}
+
+async function pushSimRate() {
+  if (!simState.running || !settings.token()) return;
+  const rate = Math.max(1, Math.min(50, Number($("#sim-rate").value) || 5));
+  try {
+    const resp = await fetch(`${settings.apiBase()}/api/sim/rate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${settings.token()}`,
+      },
+      body: JSON.stringify({ rate }),
+    });
+    if (resp.ok) {
+      simState = await resp.json();
+      simRateDirty = false;
+      renderSim();
+    }
+  } catch { /* ignore */ }
+}
+
+function flashSimError(msg) {
+  const stats = $("#sim-stats-text");
+  stats.textContent = `error: ${msg}`;
+  stats.style.color = "var(--err)";
+  setTimeout(() => { stats.style.color = ""; renderSim(); }, 3000);
+}
+
+function setupSim() {
+  $("#sim-toggle").addEventListener("click", toggleSim);
+  $("#sim-rate").addEventListener("input", () => { simRateDirty = true; });
+  // Push rate change after the user stops typing (debounced).
+  let t;
+  $("#sim-rate").addEventListener("change", () => {
+    clearTimeout(t);
+    t = setTimeout(pushSimRate, 250);
+  });
+}
+
 function pollState() {
   REGIONS.forEach(refreshRegion);
+  refreshSim();
   setTimeout(pollState, STATE_POLL_MS);
 }
 
 setupSettings();
 setupProduce();
 setupClearLog();
+setupSim();
 pollState();
 connectSSE();

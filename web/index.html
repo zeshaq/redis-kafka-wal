@@ -59,6 +59,24 @@
         <div id="event-log"></div>
       </article>
 
+      <article class="sim">
+        <header class="sim-header">
+          <h2>live traffic simulator</h2>
+          <span id="sim-status" class="sim-status sim-off">off</span>
+        </header>
+        <p class="hint">Generates a realistic mix of writes (purchases, cart adds, restocks) across all 3 regions. Bearer token required.</p>
+        <div class="sim-controls">
+          <label>
+            rate (events/sec)
+            <input id="sim-rate" type="number" min="1" max="50" value="5" step="1" />
+          </label>
+          <button id="sim-toggle" type="button">start</button>
+        </div>
+        <div class="sim-stats">
+          <span id="sim-stats-text">—</span>
+        </div>
+      </article>
+
       <article class="produce">
         <h2>produce an event</h2>
         <p class="hint" id="produce-hint">Write endpoint requires a bearer token (settings).</p>

@@ -194,18 +194,69 @@ main {
   100% { background: var(--bg-elev-2); }
 }
 
-/* bottom grid: log + produce */
+/* bottom grid: log + sim + produce */
 .bottom-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 2fr 1fr 1fr;
   gap: 12px;
   min-height: 320px;
 }
-.event-log, .produce {
+@media (max-width: 1100px) {
+  .bottom-grid { grid-template-columns: 1fr; }
+}
+.event-log, .produce, .sim {
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px 14px;
+}
+
+/* sim controls */
+.sim-header { display: flex; justify-content: space-between; align-items: center; }
+.sim-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.sim-off { color: var(--fg-faint); border-color: var(--border-strong); }
+.sim-on  { color: var(--ok); border-color: var(--ok); }
+.sim-controls {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  margin-top: 10px;
+}
+.sim-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  flex: 1;
+}
+.sim-controls button {
+  background: var(--bg-elev-2);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  min-width: 90px;
+}
+.sim-controls button:hover { border-color: var(--fg-dim); }
+.sim-controls button.running {
+  border-color: var(--err);
+  color: var(--err);
+}
+.sim-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+.sim-stats {
+  margin-top: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
 }
 .event-log-header {
   display: flex;
