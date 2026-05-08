@@ -385,3 +385,119 @@ footer {
   color: var(--fg-faint);
   text-align: center;
 }
+
+/* prose / how-it-works page */
+main.prose {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 24px 48px;
+  display: block;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--fg);
+}
+main.prose section + section { margin-top: 36px; }
+main.prose h2 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 14px;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+main.prose h3 { font-size: 16px; font-weight: 600; margin: 24px 0 8px; }
+main.prose p { margin: 0 0 14px; color: var(--fg); }
+main.prose strong { color: var(--fg); font-weight: 600; }
+main.prose em { color: var(--fg-dim); font-style: italic; }
+main.prose a { color: var(--eu); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--eu) 35%, transparent); text-underline-offset: 2px; }
+main.prose a:hover { text-decoration-color: var(--eu); }
+
+main.prose ul, main.prose ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+}
+main.prose li { margin-bottom: 6px; }
+main.prose ol.trace { counter-reset: step; padding-left: 0; list-style: none; }
+main.prose ol.trace > li {
+  counter-increment: step;
+  position: relative;
+  padding: 10px 12px 10px 42px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+main.prose ol.trace > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 12px;
+  top: 10px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+main.prose code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--bg-elev-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--fg);
+}
+main.prose pre {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+main.prose pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+main.prose pre.diagram {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--fg-dim);
+}
+
+main.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 16px;
+  font-size: 13.5px;
+}
+main.prose table th, main.prose table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+main.prose table th {
+  font-weight: 600;
+  color: var(--fg);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border-strong);
+}
+main.prose table tr:hover td { background: var(--bg-elev); }
+
+main.prose section.closing {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-faint);
+  font-size: 13px;
+}

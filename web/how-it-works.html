@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>How it works — redis-kafka-wal-lab</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>redis-kafka-wal-lab — how it works</h1>
+    <div class="header-meta">
+      <a class="link-btn" href="/">live dashboard</a>
+      <a class="link-btn" href="https://github.com/zeshaq/redis-kafka-wal" target="_blank" rel="noopener">repo</a>
+    </div>
+  </header>
+
+  <main class="prose">
+
+    <section>
+      <h2>What this is</h2>
+      <p>
+        An <strong>active-active, geo-distributed key/value system</strong>
+        built from open-source pieces: per-region Apache Kafka clusters,
+        per-region Redis OSS instances, and MirrorMaker 2 wiring them
+        together. The dashboard at <a href="/">redis-kafka-wal.pages.dev</a>
+        is a live view of three regions running on a single VM, with a
+        traffic simulator and a writer panel so you can see convergence
+        happen in real time.
+      </p>
+      <p>
+        The interesting choice is the <em>shape</em>: Kafka is the
+        <strong>source of truth</strong> for every write, and the three
+        Redis instances are <strong>materialized views</strong> built by
+        consumer services in each region. Anything you write is durable
+        on Kafka before it's visible anywhere; anything in Redis is
+        rebuildable by replaying the log from offset zero.
+      </p>
+    </section>
+
+    <section>
+      <h2>Why this shape, vs. just using Redis Enterprise</h2>
+      <p>
+        Redis Enterprise has built-in active-active geo-replication using
+        CRDTs (their CRDB feature). That's the natural &ldquo;Redis is the
+        whole product&rdquo; design and it's lower latency than what we
+        do here. Our design pays a few extra hops on the write path
+        (Redis-write &rarr; Kafka-produce &rarr; MirrorMaker &rarr;
+        Kafka-consume &rarr; Lua-apply &rarr; Redis) in exchange for two
+        properties Enterprise doesn't give you:
+      </p>
+      <ul>
+        <li>
+          <strong>The log is yours.</strong> Every write is durable in
+          Kafka and consumable by anything else &mdash; analytics, a
+          search index, a fraud-detection job. With Enterprise the
+          replication log is internal.
+        </li>
+        <li>
+          <strong>Replay-from-zero is a first-class operation.</strong>
+          Wipe a region's Redis, rewind the consumer to offset 0, and
+          rebuild deterministic state. With Enterprise you sync from a
+          peer cluster instead.
+        </li>
+      </ul>
+      <p>
+        It's not a cheap-replacement-for: it's a different design point.
+        The right answer depends on whether Redis is your system or one
+        of several views into a stream platform.
+      </p>
+    </section>
+
+    <section>
+      <h2>Topology</h2>
+      <p>
+        Three regions: <code>us</code>, <code>eu</code>, <code>ap</code>.
+        Each one runs:
+      </p>
+      <ul>
+        <li>A single-node Kafka cluster in KRaft mode.</li>
+        <li>A single-node Redis instance.</li>
+        <li>A Go materializer service that consumes events and applies
+            them to local Redis.</li>
+      </ul>
+      <p>
+        Three topics &mdash; <code>us.events</code>,
+        <code>eu.events</code>, <code>ap.events</code> &mdash; one per
+        origin region. Each topic is only ever produced into by clients
+        in its owning region; MirrorMaker 2 carries it outward to the
+        other two clusters using
+        <code>IdentityReplicationPolicy</code>, so the topic name is the
+        same on every cluster. This is what makes mirror loops
+        structurally impossible: each MM2 directional flow is filtered
+        to <em>only</em> the source region's own topic.
+      </p>
+      <pre class="diagram"><code>US region              EU region              AP region
+┌────────────┐    ┌────────────┐    ┌────────────┐
+│ Kafka-US   │⇄  │ Kafka-EU   │⇄  │ Kafka-AP   │
+│ us.events  │    │ us.events  │    │ us.events  │
+│ eu.events  │    │ eu.events  │    │ eu.events  │
+│ ap.events  │    │ ap.events  │    │ ap.events  │
+└─────┬──────┘    └─────┬──────┘    └─────┬──────┘
+      │                  │                  │
+   Materializer      Materializer       Materializer
+      │                  │                  │
+      ▼                  ▼                  ▼
+   Redis-US           Redis-EU            Redis-AP
+</code></pre>
+      <p>
+        Six MM2 directional flows wire every pair. Producers point at
+        their <em>own</em> region's Kafka (so writes are local-latency).
+        Consumers in each region subscribe to all three
+        <code>*.events</code> topics on the local cluster &mdash; the
+        local one plus the two mirrored copies.
+      </p>
+    </section>
+
+    <section>
+      <h2>One write, traced end-to-end</h2>
+      <p>
+        Suppose a user clicks <em>buy</em> in the dashboard and the
+        write panel sends <code>INCR sales:total +1</code> against
+        region <code>eu</code>. Here's what happens:
+      </p>
+      <ol class="trace">
+        <li>
+          <strong>Browser &rarr; Cloudflare Pages.</strong> The dashboard
+          posts JSON to <code>/api/produce</code> on the bridge service
+          via the Cloudflare Tunnel hostname.
+        </li>
+        <li>
+          <strong>Bridge: HLC tick.</strong> The bridge has one Hybrid
+          Logical Clock per region; for an EU write it ticks the EU
+          clock and stamps the event with
+          <code>(physical_ms, logical, region=eu)</code>. The HLC gives
+          a total order on events even when wall clocks are skewed
+          across regions.
+        </li>
+        <li>
+          <strong>Bridge: Avro encode.</strong> The event is serialized
+          with Confluent wire format: a magic byte, the schema id from
+          Schema Registry, then the Avro binary payload.
+        </li>
+        <li>
+          <strong>Bridge: Kafka produce.</strong> The encoded record
+          lands on <code>eu.events</code> at <code>kafka-eu</code>,
+          partition = <code>hash(key) % 12</code>. This is the only
+          step that has to succeed for the write to be considered
+          durable.
+        </li>
+        <li>
+          <strong>Local apply.</strong> The materializer in EU has
+          subscribed to all three <code>*.events</code> topics on
+          <code>kafka-eu</code>. It picks up the record, decodes it,
+          and runs the per-op Lua script in
+          <code>redis-eu</code>. For INCR, the script checks a
+          per-origin sequence number to dedup, then atomically updates
+          the counter and the seq sidecar.
+        </li>
+        <li>
+          <strong>Mirror to peers.</strong> MirrorMaker is reading
+          <code>eu.events</code> off <code>kafka-eu</code> and writing
+          to <code>kafka-us</code> and <code>kafka-ap</code>. After
+          ~milliseconds, the same record is on both peer clusters.
+        </li>
+        <li>
+          <strong>Remote apply.</strong> US's and AP's materializers
+          consume from <em>their</em> local cluster (which now has the
+          mirrored record). Same Lua script runs against
+          <code>redis-us</code> and <code>redis-ap</code>. Same dedup
+          guarantees apply &mdash; if the record was already applied
+          (for instance, replay after a crash), the script's
+          seq-greater check rejects it as a no-op.
+        </li>
+      </ol>
+      <p>
+        At this point all three Redis instances have the same value for
+        <code>sales:total</code>. The path the dashboard cares about is
+        the SSE event stream: each of those <em>local apply</em> events
+        in step 5/7 is also seen by a separate set of consumers inside
+        the bridge that fan events out to the browser.
+      </p>
+    </section>
+
+    <section>
+      <h2>How conflicts are resolved</h2>
+      <p>
+        Active-active means two regions can write to the same key
+        within the MM2 propagation window and arrive at the materializer
+        in either order. Each Redis op family uses a
+        <strong>different</strong> convergent strategy:
+      </p>
+      <table>
+        <thead><tr>
+          <th>Op</th>
+          <th>Strategy</th>
+          <th>Idempotent because</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td><code>SET</code> / <code>DEL</code></td>
+            <td>LWW register, HLC sidecar at <code>&lt;key&gt;:meta</code></td>
+            <td>incoming HLC must sort strictly after stored HLC</td>
+          </tr>
+          <tr>
+            <td><code>INCR</code></td>
+            <td>Counter + per-origin seq dedup at <code>&lt;key&gt;:seq:&lt;region&gt;</code></td>
+            <td>seq must be greater than max-applied seq for that origin</td>
+          </tr>
+          <tr>
+            <td><code>SADD</code> / <code>SREM</code></td>
+            <td>LWW-Element-Set with per-member HLC at <code>&lt;key&gt;:smeta</code></td>
+            <td>per-member HLC comparison</td>
+          </tr>
+          <tr>
+            <td><code>ZADD</code></td>
+            <td>LWW per (key, member), per-member HLC at <code>&lt;key&gt;:zmeta</code></td>
+            <td>per-member HLC comparison</td>
+          </tr>
+          <tr>
+            <td><code>XADD</code></td>
+            <td>Stream id derived from HLC: <code>&lt;phys_ms&gt;-&lt;logical*10 + region_idx&gt;</code></td>
+            <td>duplicate id is rejected by Redis</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Each apply happens inside a Redis Lua script so the
+        read-decide-write cycle is atomic against concurrent applies on
+        the same key. Here's the LWW script (slightly trimmed):
+      </p>
+      <pre><code>-- KEYS[1] = key, KEYS[2] = meta
+-- ARGV[1..3] = phys, logc, reg     (incoming HLC)
+-- ARGV[4]   = op (SET|DEL)
+-- ARGV[5]   = value (SET only)
+-- ARGV[6]   = ttl_ms (SET only)
+local cur = redis.call('HMGET', KEYS[2], 'phys', 'logc', 'reg')
+local cphys = tonumber(cur[1]) or -1
+local clogc = tonumber(cur[2]) or -1
+local creg  = cur[3] or ''
+local iphys = tonumber(ARGV[1])
+local ilogc = tonumber(ARGV[2])
+local ireg  = ARGV[3]
+
+local accept = false
+if     iphys > cphys then accept = true
+elseif iphys == cphys and ilogc > clogc then accept = true
+elseif iphys == cphys and ilogc == clogc and ireg > creg then accept = true
+end
+if not accept then return 0 end
+
+if ARGV[4] == 'SET' then
+  redis.call('SET', KEYS[1], ARGV[5])
+  if tonumber(ARGV[6]) > 0 then redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[6])) end
+elseif ARGV[4] == 'DEL' then
+  redis.call('DEL', KEYS[1])
+end
+redis.call('HSET', KEYS[2], 'phys', iphys, 'logc', ilogc, 'reg', ireg, 'op', ARGV[4])
+return 1</code></pre>
+      <p>
+        The same pattern repeats for the other op types &mdash; the meta
+        sidecar and comparison rule changes, but the
+        read-then-conditionally-apply structure is the same. There's
+        one deliberate simplification: <code>SADD</code>/<code>SREM</code>
+        is LWW-Element-Set, not a true OR-Set. A concurrent
+        <code>SADD m</code> from one region can lose to a slightly-later
+        <code>SREM m</code> from another even if the SREM didn't
+        observe the SADD. For tag sets and feature flags that's fine;
+        for shopping carts where &ldquo;add wins on conflict&rdquo; is
+        the right rule, you'd swap in a real OR-Set with per-tag state.
+      </p>
+    </section>
+
+    <section>
+      <h2>What you're seeing on the dashboard</h2>
+      <p>The page is wired together as follows:</p>
+      <ul>
+        <li>
+          <strong>Three region columns.</strong> Each polls
+          <code>GET&nbsp;/api/regions/&lt;region&gt;/state</code> on the
+          bridge every 1.5 seconds. The bridge reads the same set of
+          shopping-themed keys directly from that region's local Redis
+          and serves them as JSON.
+        </li>
+        <li>
+          <strong>Live event log.</strong> The bridge spawns three
+          read-only Kafka consumers (one per region). Every event each
+          one sees is annotated with which region's Kafka observed it
+          and pushed to a fan-out broadcaster. The browser opens a
+          Server-Sent Events stream at
+          <code>GET&nbsp;/api/events</code> and renders one row per
+          unique <code>event_id</code>; the colored blocks on each row
+          fill in as the same event is observed at us-Kafka, then
+          eu-Kafka after MM2 lag, then ap-Kafka. That's the
+          MM2-propagation visualization.
+        </li>
+        <li>
+          <strong>Live traffic simulator.</strong> A goroutine inside
+          the bridge fires a weighted op mix (50% purchase, 20% cart
+          add, 10% drop, 10% VIP join, 5% restock, 5% inventory race)
+          at a configurable rate. <code>POST&nbsp;/api/sim/start</code>
+          starts it; <code>/api/sim/stop</code> stops; <code>/api/sim/rate</code>
+          retunes mid-flight without restart.
+        </li>
+        <li>
+          <strong>Produce panel.</strong>
+          <code>POST&nbsp;/api/produce</code> takes a JSON body
+          describing one op and runs it through the same internal
+          <code>doProduce()</code> function the simulator uses. Bearer
+          token required (set in &ldquo;settings&rdquo;).
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Failure modes</h2>
+      <p>The repo has scripts to reproduce each scenario:</p>
+      <ul>
+        <li>
+          <strong>Region down</strong>
+          (<code>scripts/failover.sh</code>): kill a region's Kafka and
+          materializer; the other two keep accepting writes; on
+          recovery, MM2 drains the backlog and HLC-gated apply means
+          older events lose to anything newer that landed during the
+          outage. Final state on the recovered region matches the rest.
+        </li>
+        <li>
+          <strong>Network partition</strong>
+          (<code>scripts/partition.sh</code>): disconnect a region's
+          Kafka from the docker network. Each side accepts local writes
+          and diverges. After healing, MM2 reconciles in both
+          directions; CRDT/LWW semantics resolve concurrent writes.
+        </li>
+        <li>
+          <strong>Redis loss / replay</strong>
+          (<code>scripts/replay.sh</code>): stop the consumer, FLUSHDB,
+          reset the consumer group offsets to earliest, restart the
+          consumer. The materializer rebuilds Redis state by reading
+          all events from every origin region. Idempotent handlers make
+          this exactly correct (with one documented caveat for streams
+          &mdash; see ADR-0008).
+        </li>
+        <li>
+          <strong>MirrorMaker lag</strong>: shows up as growing
+          end-offset gaps between origin and target clusters, visible in
+          <code>scripts/status.sh</code>. The materializers keep
+          consuming local events fine; only cross-region freshness
+          suffers.
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Tech stack</h2>
+      <table>
+        <thead><tr><th>Layer</th><th>Choice</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Kafka brokers</td><td><code>confluentinc/cp-kafka:7.6.1</code> in KRaft mode</td><td>Single-node per region for the lab; production would be 3+ brokers per region with RF=3.</td></tr>
+          <tr><td>Replication</td><td>MirrorMaker 2 standalone</td><td><code>IdentityReplicationPolicy</code>; six directional flows.</td></tr>
+          <tr><td>Schema Registry</td><td><code>confluentinc/cp-schema-registry:7.6.1</code>, <strong>one global instance</strong></td><td>Lab simplification. Production geo would use Confluent Schema Linking or per-region SRs with coordinated registration.</td></tr>
+          <tr><td>Wire format</td><td>Avro + Confluent framing</td><td>Single Avro union covers all op payloads.</td></tr>
+          <tr><td>Redis</td><td><code>redis:7.4-alpine</code></td><td>Pure OSS Redis; no modules required.</td></tr>
+          <tr><td>Kafka client</td><td><code>github.com/twmb/franz-go</code></td><td>Pure Go, no CGo. Lower image size, simpler builds.</td></tr>
+          <tr><td>Avro</td><td><code>github.com/hamba/avro/v2</code></td><td>Pure Go.</td></tr>
+          <tr><td>Redis client</td><td><code>github.com/redis/go-redis/v9</code></td><td>De-facto standard.</td></tr>
+          <tr><td>Materializer / Bridge</td><td>Go 1.23</td><td>Static binaries built in a multi-stage Docker image.</td></tr>
+          <tr><td>Frontend</td><td>Vanilla HTML + JS + CSS</td><td>No framework, no build step.</td></tr>
+          <tr><td>Hosting</td><td>Cloudflare Pages (frontend) + Cloudflare Tunnel (bridge)</td><td>No port-forwarding from the VM; cloudflared connects outbound to CF and routes traffic in.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Code organization: <code>cmd/bridge</code>,
+        <code>cmd/consumer</code>, <code>cmd/producer</code> are the
+        entry points; <code>pkg/hlc</code>,
+        <code>pkg/event</code>, <code>pkg/crdt</code> are the
+        building-block libraries; <code>web/</code> is the dashboard
+        you're looking at; <code>infra/k8s</code> and
+        <code>infra/terraform</code> are sketches for taking it beyond
+        the docker-compose lab. See
+        <a href="https://github.com/zeshaq/redis-kafka-wal/tree/main/docs" target="_blank" rel="noopener">docs/</a>
+        for the architecture / consistency / conflict-resolution writeups
+        and the ten ADRs covering every load-bearing decision.
+      </p>
+    </section>
+
+    <section>
+      <h2>Try it</h2>
+      <ul>
+        <li>Open the <a href="/">dashboard</a> in another tab.</li>
+        <li>Click <em>start</em> on the live traffic simulator. Three columns will move in near-lockstep with sub-second divergence visible during bursts.</li>
+        <li>In <em>settings</em>, paste the bearer token, then use the produce panel to write your own ops. Watch the event log emit one row, observed in three regions with three colored blocks.</li>
+        <li>From the repo: <code>./scripts/scenario.sh --reset</code> for the narrated 40-second flash-sale walkthrough.</li>
+      </ul>
+    </section>
+
+    <section class="closing">
+      <p>
+        Source: <a href="https://github.com/zeshaq/redis-kafka-wal" target="_blank" rel="noopener">github.com/zeshaq/redis-kafka-wal</a>.
+        ADRs and architecture docs are in
+        <a href="https://github.com/zeshaq/redis-kafka-wal/tree/main/docs/adr" target="_blank" rel="noopener">docs/adr/</a>.
+      </p>
+    </section>
+
+  </main>
+
+  <footer>
+    <span>active-active geo lab — Kafka source-of-truth, per-region Redis materialized view</span>
+  </footer>
+</body>
+</html>
