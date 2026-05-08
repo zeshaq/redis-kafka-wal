@@ -8,6 +8,7 @@ COPY . .
 RUN go mod tidy
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/consumer ./cmd/consumer
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/producer ./cmd/producer
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/bridge   ./cmd/bridge
 
 FROM alpine:3.20 AS consumer
 RUN apk add --no-cache ca-certificates
@@ -18,3 +19,9 @@ FROM alpine:3.20 AS producer
 RUN apk add --no-cache ca-certificates
 COPY --from=build /out/producer /usr/local/bin/producer
 ENTRYPOINT ["/usr/local/bin/producer"]
+
+FROM alpine:3.20 AS bridge
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/bridge /usr/local/bin/bridge
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/bridge"]

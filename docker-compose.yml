@@ -297,6 +297,49 @@ services:
     # No restart, no depends_on — the user picks which region to target by
     # passing -e REGION=... -e BOOTSTRAP=kafka-<region>:29092 at run-time.
 
+  # ----- Bridge: HTTP+SSE service that the live web UI talks to -----------
+  bridge:
+    build:
+      context: .
+      dockerfile: docker/go.Dockerfile
+      target: bridge
+    container_name: bridge
+    restart: unless-stopped
+    depends_on:
+      kafka-us:
+        condition: service_healthy
+      kafka-eu:
+        condition: service_healthy
+      kafka-ap:
+        condition: service_healthy
+      redis-us:
+        condition: service_healthy
+      redis-eu:
+        condition: service_healthy
+      redis-ap:
+        condition: service_healthy
+      schemas-init:
+        condition: service_completed_successfully
+    environment:
+      LISTEN: ":8080"
+      SR_URL: "http://schema-registry:8081"
+      BRIDGE_WRITE_TOKEN: "${BRIDGE_WRITE_TOKEN:-}"
+      ALLOW_ORIGIN: "${BRIDGE_ALLOW_ORIGIN:-*}"
+    # 8080 is reachable by `cloudflared` over the internal network.
+    # Mapping to host:18080 too, for local debugging without the tunnel.
+    ports:
+      - "18080:8080"
+
+  # ----- Cloudflare Tunnel: exposes bridge:8080 to a public hostname ------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    depends_on:
+      bridge:
+        condition: service_started
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARED_TOKEN:?set CLOUDFLARED_TOKEN in .env}"]
+
 networks:
   default:
     name: redis-kafka-wal-lab

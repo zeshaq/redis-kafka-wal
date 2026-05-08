@@ -14,3 +14,11 @@ go.sum
 
 # Local docker volumes (none declared, but defensive)
 data/
+
+# Local secrets and runtime state — never commit these
+.env
+.local/
+
+# Wrangler (Cloudflare Pages CLI) cache + state
+.wrangler/
+

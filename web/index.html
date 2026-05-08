@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>redis-kafka-wal-lab — live</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>redis-kafka-wal-lab — live</h1>
+    <div class="header-meta">
+      <span id="conn-status" class="conn-status conn-pending">connecting…</span>
+      <span class="header-spacer"></span>
+      <button id="settings-btn" class="link-btn" type="button">settings</button>
+      <a class="link-btn" href="https://github.com/zeshaq/redis-kafka-wal" target="_blank" rel="noopener">repo</a>
+    </div>
+  </header>
+
+  <section id="settings-panel" class="settings-panel hidden">
+    <label>
+      API base URL
+      <input id="api-base" type="text" placeholder="https://api.redis-kafka-wal.example.com" />
+    </label>
+    <label>
+      Bearer token (write ops)
+      <input id="api-token" type="password" placeholder="empty = read-only" />
+    </label>
+    <button id="settings-save" type="button">save</button>
+    <p class="hint">Token is stored only in your browser's localStorage. Read endpoints don't need it.</p>
+  </section>
+
+  <main>
+    <section class="regions">
+      <article class="region" data-region="us">
+        <h2><span class="region-tag region-us">US</span> redis-us</h2>
+        <div class="region-body" id="state-us"></div>
+      </article>
+      <article class="region" data-region="eu">
+        <h2><span class="region-tag region-eu">EU</span> redis-eu</h2>
+        <div class="region-body" id="state-eu"></div>
+      </article>
+      <article class="region" data-region="ap">
+        <h2><span class="region-tag region-ap">AP</span> redis-ap</h2>
+        <div class="region-body" id="state-ap"></div>
+      </article>
+    </section>
+
+    <section class="bottom-grid">
+      <article class="event-log">
+        <header class="event-log-header">
+          <h2>live event stream</h2>
+          <div class="event-log-stats">
+            <span id="evt-count">0</span> events ·
+            <button id="clear-log" class="link-btn" type="button">clear</button>
+          </div>
+        </header>
+        <p class="hint">Each event is observed on all three regions' Kafkas as MM2 propagates it. Color tag = origin region. Stripes show observed-at regions in arrival order.</p>
+        <div id="event-log"></div>
+      </article>
+
+      <article class="produce">
+        <h2>produce an event</h2>
+        <p class="hint" id="produce-hint">Write endpoint requires a bearer token (settings).</p>
+        <form id="produce-form">
+          <div class="row">
+            <label>
+              region
+              <select name="region">
+                <option value="us">us</option>
+                <option value="eu">eu</option>
+                <option value="ap">ap</option>
+              </select>
+            </label>
+            <label>
+              op
+              <select name="op" id="op-select">
+                <option value="SET">SET</option>
+                <option value="DEL">DEL</option>
+                <option value="INCR">INCR</option>
+                <option value="SADD">SADD</option>
+                <option value="SREM">SREM</option>
+                <option value="ZADD">ZADD</option>
+                <option value="XADD">XADD</option>
+              </select>
+            </label>
+            <label>
+              key
+              <input name="key" type="text" required />
+            </label>
+          </div>
+          <div class="row" id="op-fields-row"><!-- per-op fields injected here --></div>
+          <div class="row produce-actions">
+            <button type="submit">produce</button>
+            <span id="produce-result" class="produce-result"></span>
+          </div>
+        </form>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <span>active-active geo lab — Kafka source-of-truth, per-region Redis materialized view</span>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
