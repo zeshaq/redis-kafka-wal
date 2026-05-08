@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live event — redis-kafka-wal-lab</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="live.css" />
+</head>
+<body class="live-body">
+  <header>
+    <h1 id="event-title">redis-kafka-wal-lab — live event</h1>
+    <div class="header-meta">
+      <span id="region-pill" class="region-pill" title="virtual region you're connected to">
+        <span class="region-pill-dot"></span>
+        <span id="region-pill-label">…</span>
+      </span>
+      <span id="attendees-pill" class="conn-status conn-pending">— online</span>
+      <span class="header-spacer"></span>
+      <button id="settings-btn" class="link-btn" type="button">settings</button>
+      <a class="link-btn" href="/">dashboard</a>
+      <a class="link-btn" href="/how-it-works">how it works</a>
+    </div>
+  </header>
+
+  <section id="settings-panel" class="settings-panel hidden">
+    <label>
+      Display name
+      <input id="display-name" type="text" placeholder="Anonymous" maxlength="40" />
+    </label>
+    <label>
+      Virtual region
+      <select id="region-select">
+        <option value="us">us — Americas</option>
+        <option value="eu">eu — Europe</option>
+        <option value="ap">ap — Asia-Pacific</option>
+      </select>
+    </label>
+    <label>
+      Bearer token (write ops)
+      <input id="api-token" type="password" placeholder="required to react / vote / ask" />
+    </label>
+    <label>
+      API base URL
+      <input id="api-base" type="text" placeholder="https://redis-kafka-wal-api.zeteq.com" />
+    </label>
+    <button id="settings-save" type="button">save</button>
+    <p class="hint">Token + name persist in your browser. Open this URL in three tabs with three different regions to see eventual consistency.</p>
+  </section>
+
+  <main class="live-main">
+
+    <section class="event-hero">
+      <h2 id="hero-title">…</h2>
+      <p class="hero-meta">
+        <span id="hero-speaker">—</span>
+        <span class="hero-sep">·</span>
+        <span id="hero-topic">—</span>
+      </p>
+      <p class="hero-meta">
+        <span id="hero-status" class="hero-status">draft</span>
+      </p>
+    </section>
+
+    <section class="reactions">
+      <div class="reactions-row" id="reactions-row">
+        <!-- buttons injected by JS -->
+      </div>
+      <div id="reactions-fx" class="reactions-fx" aria-hidden="true"></div>
+    </section>
+
+    <section class="grid">
+
+      <article class="qa-panel">
+        <header class="panel-head">
+          <h3>Q&amp;A</h3>
+          <span id="qa-count" class="panel-stat">0 questions</span>
+        </header>
+        <form id="qa-form" class="qa-form">
+          <input id="qa-input" type="text" maxlength="240" placeholder="Ask anything…" autocomplete="off" />
+          <button type="submit">send</button>
+        </form>
+        <ul id="qa-list" class="qa-list"></ul>
+        <p class="hint">Top questions float up. Click ▲ to upvote. Your vote rolls up across all 3 regions via INCR + per-origin seq dedup.</p>
+      </article>
+
+      <article class="poll-panel">
+        <header class="panel-head">
+          <h3>Live poll</h3>
+          <span id="poll-total" class="panel-stat">— votes</span>
+        </header>
+        <p id="poll-question" class="poll-question">— no poll configured —</p>
+        <div id="poll-options" class="poll-options"></div>
+        <p class="hint">Vote tallies are G-counters: every region's votes sum into one total once MM2 propagates.</p>
+      </article>
+
+    </section>
+
+  </main>
+
+  <footer>
+    <span>active-active geo lab — Kafka source-of-truth, per-region Redis materialized view</span>
+  </footer>
+
+  <script src="live.js" defer></script>
+</body>
+</html>

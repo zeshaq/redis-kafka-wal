@@ -277,6 +277,8 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.events(w, r)
 	case r.URL.Path == "/api/produce" && r.Method == http.MethodPost:
 		s.produce(w, r)
+	case r.URL.Path == "/api/event-state":
+		s.eventState(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/sim"):
 		s.simRoute(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/regions/"):
