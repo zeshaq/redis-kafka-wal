@@ -319,48 +319,57 @@ func (s *server) regionRoute(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-// regionState: a snapshot of the demo keys plus their meta sidecars.
+// regionState: a snapshot of the lab's "live" keys, themed around a
+// global flash-sale scenario so the dashboard tells a story:
+//
+//   inventory:laptop      LWW string   stock count for the headline SKU
+//   sales:total           G-Counter    total orders across all regions
+//   cart:active           Set          users with an active cart right now
+//   leaderboard:spenders  ZSET         top spenders this sale
+//   orders:feed           Stream       per-order events
+//
+// The fixed key list keeps the dashboard simple; the /api/regions/:r/key/:k
+// endpoint exists for poking at any other key.
 func (s *server) regionState(w http.ResponseWriter, r *http.Request, region string, rdb *redis.Client) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
 	out := map[string]any{
-		"region":     region,
-		"timestamp":  time.Now().UTC(),
-		"dbsize":     ignoreErr(rdb.DBSize(ctx).Result()),
+		"region":    region,
+		"timestamp": time.Now().UTC(),
+		"dbsize":    ignoreErr(rdb.DBSize(ctx).Result()),
 	}
 
-	// LWW string
-	val, _ := rdb.Get(ctx, "user:42:name").Result()
-	meta, _ := rdb.HGetAll(ctx, "user:42:name:meta").Result()
-	out["user:42:name"] = map[string]any{"value": val, "meta": meta}
+	// LWW string — current inventory of the headline SKU
+	val, _ := rdb.Get(ctx, "inventory:laptop").Result()
+	meta, _ := rdb.HGetAll(ctx, "inventory:laptop:meta").Result()
+	out["inventory:laptop"] = map[string]any{"value": val, "meta": meta}
 
-	// G-counter
-	cnt, _ := rdb.Get(ctx, "counter:hits").Result()
+	// G-Counter — total sales
+	cnt, _ := rdb.Get(ctx, "sales:total").Result()
 	seqs := map[string]string{}
 	for _, reg := range []string{"us", "eu", "ap"} {
-		v, _ := rdb.Get(ctx, "counter:hits:seq:"+reg).Result()
+		v, _ := rdb.Get(ctx, "sales:total:seq:"+reg).Result()
 		seqs[reg] = v
 	}
-	out["counter:hits"] = map[string]any{"value": cnt, "seqs": seqs}
+	out["sales:total"] = map[string]any{"value": cnt, "seqs": seqs}
 
-	// Set
-	mems, _ := rdb.SMembers(ctx, "tags").Result()
-	smeta, _ := rdb.HGetAll(ctx, "tags:smeta").Result()
-	out["tags"] = map[string]any{"members": mems, "smeta": smeta}
+	// Set — currently active carts
+	mems, _ := rdb.SMembers(ctx, "cart:active").Result()
+	out["cart:active"] = map[string]any{"members": mems}
 
-	// ZSET
-	zs, _ := rdb.ZRevRangeWithScores(ctx, "leaderboard", 0, -1).Result()
+	// ZSET — leaderboard of top spenders
+	zs, _ := rdb.ZRevRangeWithScores(ctx, "leaderboard:spenders", 0, 9).Result()
 	zlist := make([]map[string]any, 0, len(zs))
 	for _, z := range zs {
 		zlist = append(zlist, map[string]any{"member": z.Member, "score": z.Score})
 	}
-	out["leaderboard"] = map[string]any{"entries": zlist}
+	out["leaderboard:spenders"] = map[string]any{"entries": zlist}
 
-	// Stream
-	xlen, _ := rdb.XLen(ctx, "feed").Result()
-	xs, _ := rdb.XRange(ctx, "feed", "-", "+").Result()
-	out["feed"] = map[string]any{"xlen": xlen, "entries": xs}
+	// Stream — order events
+	xlen, _ := rdb.XLen(ctx, "orders:feed").Result()
+	xs, _ := rdb.XRevRangeN(ctx, "orders:feed", "+", "-", 5).Result()
+	out["orders:feed"] = map[string]any{"xlen": xlen, "recent": xs}
 
 	writeJSON(w, http.StatusOK, out)
 }

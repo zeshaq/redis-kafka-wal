@@ -77,21 +77,67 @@ function renderRegion(region, s) {
   lastState[region] = s;
 
   const kvs = [];
-  kvs.push(kvBlock("user:42:name", s["user:42:name"]?.value ?? "", changed(prev, s, "user:42:name", "value")));
-  kvs.push(kvBlock("counter:hits", s["counter:hits"]?.value ?? "", changed(prev, s, "counter:hits", "value")));
+  kvs.push(kvBlock(
+    "inventory:laptop",
+    s["inventory:laptop"]?.value ?? "",
+    changed(prev, s, "inventory:laptop", "value"),
+  ));
 
-  const tags = (s["tags"]?.members || []).slice().sort();
-  kvs.push(kvBlock("tags", tags.join(", "), changedJSON(prev, s, "tags", "members")));
+  kvs.push(kvBlock(
+    "sales:total",
+    s["sales:total"]?.value ?? "0",
+    changed(prev, s, "sales:total", "value"),
+  ));
 
-  const lb = (s["leaderboard"]?.entries || []).map(e => `${e.member}=${e.score}`).join("\n");
-  kvs.push(kvBlock("leaderboard", lb, changedJSON(prev, s, "leaderboard", "entries")));
+  const carts = (s["cart:active"]?.members || []).slice().sort();
+  const cartLabel = carts.length === 0
+    ? ""
+    : carts.length <= 6 ? carts.join(", ") : `${carts.slice(0, 6).join(", ")}  (+${carts.length - 6} more)`;
+  kvs.push(kvBlock(
+    `cart:active  (${carts.length})`,
+    cartLabel,
+    changedJSON(prev, s, "cart:active", "members"),
+  ));
 
-  const xlen = s["feed"]?.xlen ?? 0;
-  kvs.push(kvBlock("feed (XLEN)", String(xlen), changed(prev, s, "feed", "xlen")));
+  const lb = (s["leaderboard:spenders"]?.entries || [])
+    .map(e => `${pad(e.member, 18)} ${e.score}`)
+    .join("\n");
+  kvs.push(kvBlock(
+    "leaderboard:spenders  (top 10)",
+    lb,
+    changedJSON(prev, s, "leaderboard:spenders", "entries"),
+  ));
+
+  const xlen = s["orders:feed"]?.xlen ?? 0;
+  const recent = (s["orders:feed"]?.recent || [])
+    .slice(0, 3)
+    .map(e => formatStreamEntry(e))
+    .join("\n");
+  kvs.push(kvBlock(
+    `orders:feed  (XLEN=${xlen})`,
+    recent,
+    changed(prev, s, "orders:feed", "xlen"),
+  ));
 
   kvs.push(kvBlock("dbsize", String(s.dbsize ?? "?"), false));
 
   root.replaceChildren(...kvs);
+}
+
+function pad(s, n) {
+  s = String(s ?? "");
+  return s.length >= n ? s : s + " ".repeat(n - s.length);
+}
+
+function formatStreamEntry(e) {
+  if (!e) return "";
+  const id = e.ID || e.id || "?";
+  const fields = e.Values || e.values || {};
+  const parts = Object.entries(fields)
+    .filter(([k]) => !k.startsWith("__"))
+    .map(([k, v]) => `${k}=${v}`)
+    .join(" ");
+  return `${id.split("-")[0]}  ${parts}`;
 }
 
 function changed(prev, cur, key, field) {
