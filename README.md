@@ -26,10 +26,19 @@ US region              EU region              AP region
 The lab covers seven Redis ops, each with a different conflict-resolution
 strategy: `SET`, `DEL`, `INCR`, `SADD`, `SREM`, `ZADD`, `XADD`.
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design,
-[`docs/conflict-resolution.md`](docs/conflict-resolution.md) for the per-op
-math, and [`docs/failure-modes.md`](docs/failure-modes.md) for what breaks
-when.
+## Documentation map
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — system-level view with diagrams
+- [`docs/architecture.md`](docs/architecture.md) — event-flow + topic topology
+- [`docs/consistency.md`](docs/consistency.md) — what we guarantee (and don't)
+- [`docs/conflict-resolution.md`](docs/conflict-resolution.md) — CRDT math per op
+- [`docs/failure-modes.md`](docs/failure-modes.md) — what breaks when
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operational playbook
+- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terminology
+- [`docs/adr/`](docs/adr/) — Architecture Decision Records (10 of them)
+- [`infra/`](infra/) — deploy targets: docker-compose (here), Kustomize, Terraform sketch
+- [`ROADMAP.md`](ROADMAP.md) — known gaps and where to extend
+- [`CLAUDE.md`](CLAUDE.md) — agent project memory (auto-loaded by Claude Code)
 
 ## Prerequisites
 

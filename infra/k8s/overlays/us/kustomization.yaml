@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: us
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+# Replace the placeholder ConfigMap with the real values for this region.
+# CLUSTER_ID is a base64-encoded 16-byte UUID (22 chars, no padding); generate
+# with `python3 -c "import base64,uuid; print(base64.urlsafe_b64encode(uuid.uuid4().bytes).rstrip(b'=').decode())"`
+# and replace per region.
+configMapGenerator:
+  - name: region-config
+    behavior: replace
+    literals:
+      - REGION=us
+      - KAFKA_CLUSTER_ID=hYP8jVNlQGSIHfhro3iZ4w

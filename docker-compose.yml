@@ -52,7 +52,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      CLUSTER_ID: "RGVtb0NsdXN0ZXJVU3JlZ2lvbg"
+      CLUSTER_ID: "hYP8jVNlQGSIHfhro3iZ4w"
 
   redis-us:
     image: redis:7.4-alpine
@@ -88,7 +88,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      CLUSTER_ID: "RGVtb0NsdXN0ZXJFVXJlZ2lvbg"
+      CLUSTER_ID: "xv7-R_BwRZq3LcZqLWLFKQ"
 
   redis-eu:
     image: redis:7.4-alpine
@@ -124,7 +124,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      CLUSTER_ID: "RGVtb0NsdXN0ZXJBUHJlZ2lvbg"
+      CLUSTER_ID: "ywERZ17hQRumFE7DsGsyJw"
 
   redis-ap:
     image: redis:7.4-alpine

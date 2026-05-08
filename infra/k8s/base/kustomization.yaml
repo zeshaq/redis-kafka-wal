@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Per-region resources. The overlay sets the namespace and patches the
+# REGION env var into the materializer; everything else is identical
+# across regions.
+resources:
+  - kafka.yaml
+  - redis.yaml
+  - materializer.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: redis-kafka-wal
+
+# REGION must be patched in by the overlay. Cluster-id likewise: the
+# base provides a placeholder that overlays MUST replace, otherwise
+# Kafka KRaft will crash-loop with "invalid base64 UUID".
+configMapGenerator:
+  - name: region-config
+    literals:
+      - REGION=PLACEHOLDER
+      - KAFKA_CLUSTER_ID=PLACEHOLDER_22_CHARS_REPLACE

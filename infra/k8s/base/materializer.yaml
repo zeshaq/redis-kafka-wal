@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: materializer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: materializer
+  template:
+    metadata:
+      labels:
+        app: materializer
+    spec:
+      containers:
+        - name: materializer
+          # Build with: docker build -f docker/go.Dockerfile --target consumer -t local/materializer:latest .
+          # Push to your registry and update the image ref before applying.
+          image: local/materializer:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: region-config
+                  key: REGION
+            - name: BOOTSTRAP
+              # Local Kafka in this namespace.
+              value: "kafka-0.kafka.$(POD_NAMESPACE).svc.cluster.local:29092"
+            - name: REDIS_ADDR
+              value: "redis:6379"
+            - name: SR_URL
+              # Single shared SR across all regions; runs in `shared` namespace.
+              value: "http://schema-registry.shared.svc.cluster.local:8081"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
