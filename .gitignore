@@ -1,0 +1,16 @@
+# Go build artifacts
+/bin/
+/out/
+*.test
+*.prof
+
+# Locally generated; the Docker build runs `go mod tidy` to populate this.
+go.sum
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store
+
+# Local docker volumes (none declared, but defensive)
+data/

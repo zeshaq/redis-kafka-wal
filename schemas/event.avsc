@@ -1,0 +1,101 @@
+{
+  "type": "record",
+  "name": "Event",
+  "namespace": "lab.geo",
+  "doc": "A single write originating in one region. Carried on <origin>.events; mirrored to peer regions; applied to local Redis by the materializer.",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "ULID. Used for idempotency dedup on commutative ops (INCR)."
+    },
+    {
+      "name": "origin_region",
+      "type": {
+        "type": "enum",
+        "name": "Region",
+        "symbols": ["us", "eu", "ap"]
+      },
+      "doc": "Region that produced this write. Always equals the prefix of the topic name."
+    },
+    {
+      "name": "hlc",
+      "type": {
+        "type": "record",
+        "name": "HLC",
+        "fields": [
+          {"name": "physical_ms", "type": "long"},
+          {"name": "logical", "type": "int"},
+          {"name": "region", "type": "Region"}
+        ]
+      },
+      "doc": "Hybrid Logical Clock. Total order with region as tiebreak. Used for LWW and per-member CRDT comparisons."
+    },
+    {
+      "name": "key",
+      "type": "string",
+      "doc": "Redis key the op targets. Topic partition = hash(key) % partitions."
+    },
+    {
+      "name": "op",
+      "type": {
+        "type": "enum",
+        "name": "Op",
+        "symbols": ["SET", "DEL", "INCR", "SADD", "SREM", "ZADD", "XADD"]
+      }
+    },
+    {
+      "name": "payload",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "SetVal",
+          "fields": [
+            {"name": "value", "type": "bytes"},
+            {"name": "ttl_ms", "type": ["null", "long"], "default": null}
+          ]
+        },
+        {
+          "type": "record",
+          "name": "DelVal",
+          "fields": []
+        },
+        {
+          "type": "record",
+          "name": "IncrVal",
+          "fields": [
+            {"name": "delta", "type": "long"},
+            {"name": "seq", "type": "long", "doc": "Monotonic per (origin_region, key). Used to dedup commutative INCR on replay."}
+          ]
+        },
+        {
+          "type": "record",
+          "name": "SAddVal",
+          "fields": [{"name": "member", "type": "string"}]
+        },
+        {
+          "type": "record",
+          "name": "SRemVal",
+          "fields": [{"name": "member", "type": "string"}]
+        },
+        {
+          "type": "record",
+          "name": "ZAddVal",
+          "fields": [
+            {"name": "member", "type": "string"},
+            {"name": "score", "type": "double"}
+          ]
+        },
+        {
+          "type": "record",
+          "name": "XAddVal",
+          "fields": [
+            {"name": "fields", "type": {"type": "map", "values": "string"}}
+          ]
+        }
+      ],
+      "default": null
+    }
+  ]
+}

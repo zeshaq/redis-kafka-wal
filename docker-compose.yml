@@ -1,0 +1,302 @@
+# 3-region active-active geo lab: Kafka (event log) + Redis (materialized view).
+#
+# Each region runs its own single-node Kafka KRaft cluster and its own Redis.
+# MirrorMaker 2 replicates origin-region topics (us.events, eu.events, ap.events)
+# between every cluster pair using IdentityReplicationPolicy so topic names are
+# preserved across clusters.
+#
+# Schema Registry: ONE instance for the whole lab (backed by kafka-us). This is
+# a deliberate lab simplification — see docs/architecture.md for how a real geo
+# deployment handles schemas (Confluent Schema Linking or per-region SRs with
+# coordinated registration).
+#
+# Host port map:
+#   Kafka:  us=19092  eu=19093  ap=19094
+#   Redis:  us=16379  eu=16380  ap=16381
+#   SR:     8081
+#
+# Compose-internal addresses (for use between containers):
+#   kafka-us:29092  kafka-eu:29092  kafka-ap:29092
+#   redis-us:6379   redis-eu:6379   redis-ap:6379
+#   schema-registry:8081
+
+x-kafka-common: &kafka-common
+  image: confluentinc/cp-kafka:7.6.1
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 20s
+
+services:
+  # ----- US region ---------------------------------------------------------
+  kafka-us:
+    <<: *kafka-common
+    container_name: kafka-us
+    hostname: kafka-us
+    ports:
+      - "19092:19092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:19092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-us:29092,EXTERNAL://localhost:19092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-us:29093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "RGVtb0NsdXN0ZXJVU3JlZ2lvbg"
+
+  redis-us:
+    image: redis:7.4-alpine
+    container_name: redis-us
+    hostname: redis-us
+    restart: unless-stopped
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ----- EU region ---------------------------------------------------------
+  kafka-eu:
+    <<: *kafka-common
+    container_name: kafka-eu
+    hostname: kafka-eu
+    ports:
+      - "19093:19092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:19092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-eu:29092,EXTERNAL://localhost:19093"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-eu:29093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "RGVtb0NsdXN0ZXJFVXJlZ2lvbg"
+
+  redis-eu:
+    image: redis:7.4-alpine
+    container_name: redis-eu
+    hostname: redis-eu
+    restart: unless-stopped
+    ports:
+      - "16380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ----- AP region ---------------------------------------------------------
+  kafka-ap:
+    <<: *kafka-common
+    container_name: kafka-ap
+    hostname: kafka-ap
+    ports:
+      - "19094:19092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093,EXTERNAL://0.0.0.0:19092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka-ap:29092,EXTERNAL://localhost:19094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka-ap:29093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "RGVtb0NsdXN0ZXJBUHJlZ2lvbg"
+
+  redis-ap:
+    image: redis:7.4-alpine
+    container_name: redis-ap
+    hostname: redis-ap
+    restart: unless-stopped
+    ports:
+      - "16381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ----- Shared Schema Registry (lab simplification) -----------------------
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    container_name: schema-registry
+    hostname: schema-registry
+    restart: unless-stopped
+    depends_on:
+      kafka-us:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: "http://0.0.0.0:8081"
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://kafka-us:29092"
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: "_schemas"
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: "backward"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/subjects >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # ----- One-shot: register Avro schemas in the SR -------------------------
+  schemas-init:
+    image: curlimages/curl:8.10.1
+    container_name: schemas-init
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+    volumes:
+      - ./schemas:/schemas:ro
+      - ./scripts/register-schemas.sh:/register.sh:ro
+    entrypoint: ["sh", "/register.sh"]
+    environment:
+      SR_URL: "http://schema-registry:8081"
+    restart: "no"
+
+  # ----- One-shot: create per-region origin topics -------------------------
+  topics-init:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: topics-init
+    depends_on:
+      kafka-us:
+        condition: service_healthy
+      kafka-eu:
+        condition: service_healthy
+      kafka-ap:
+        condition: service_healthy
+    entrypoint: ["bash", "/init.sh"]
+    volumes:
+      - ./scripts/init-topics.sh:/init.sh:ro
+    restart: "no"
+
+  # ----- MirrorMaker 2 (standalone, single process, all 6 directions) -----
+  mirrormaker:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: mirrormaker
+    hostname: mirrormaker
+    restart: unless-stopped
+    depends_on:
+      kafka-us:
+        condition: service_healthy
+      kafka-eu:
+        condition: service_healthy
+      kafka-ap:
+        condition: service_healthy
+      topics-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./docker/mm2/mm2.properties:/etc/mm2/mm2.properties:ro
+    command:
+      - bash
+      - -c
+      - "/usr/bin/connect-mirror-maker /etc/mm2/mm2.properties"
+
+  # ----- Materializer service per region (Kafka -> Redis) -----------------
+  consumer-us:
+    build:
+      context: .
+      dockerfile: docker/go.Dockerfile
+      target: consumer
+    container_name: consumer-us
+    restart: unless-stopped
+    depends_on:
+      kafka-us:
+        condition: service_healthy
+      redis-us:
+        condition: service_healthy
+      schemas-init:
+        condition: service_completed_successfully
+      topics-init:
+        condition: service_completed_successfully
+    environment:
+      REGION: us
+      BOOTSTRAP: "kafka-us:29092"
+      REDIS_ADDR: "redis-us:6379"
+      SR_URL: "http://schema-registry:8081"
+
+  consumer-eu:
+    build:
+      context: .
+      dockerfile: docker/go.Dockerfile
+      target: consumer
+    container_name: consumer-eu
+    restart: unless-stopped
+    depends_on:
+      kafka-eu:
+        condition: service_healthy
+      redis-eu:
+        condition: service_healthy
+      schemas-init:
+        condition: service_completed_successfully
+      topics-init:
+        condition: service_completed_successfully
+    environment:
+      REGION: eu
+      BOOTSTRAP: "kafka-eu:29092"
+      REDIS_ADDR: "redis-eu:6379"
+      SR_URL: "http://schema-registry:8081"
+
+  consumer-ap:
+    build:
+      context: .
+      dockerfile: docker/go.Dockerfile
+      target: consumer
+    container_name: consumer-ap
+    restart: unless-stopped
+    depends_on:
+      kafka-ap:
+        condition: service_healthy
+      redis-ap:
+        condition: service_healthy
+      schemas-init:
+        condition: service_completed_successfully
+      topics-init:
+        condition: service_completed_successfully
+    environment:
+      REGION: ap
+      BOOTSTRAP: "kafka-ap:29092"
+      REDIS_ADDR: "redis-ap:6379"
+      SR_URL: "http://schema-registry:8081"
+
+  # ----- One-shot producer (used by demo / scripts) -----------------------
+  # Activate with `docker compose run --rm producer-tool <subcommand> ...`
+  # Compose only starts this when explicitly invoked (profile: tools).
+  producer-tool:
+    build:
+      context: .
+      dockerfile: docker/go.Dockerfile
+      target: producer
+    profiles: ["tools"]
+    environment:
+      SR_URL: "http://schema-registry:8081"
+    # No restart, no depends_on — the user picks which region to target by
+    # passing -e REGION=... -e BOOTSTRAP=kafka-<region>:29092 at run-time.
+
+networks:
+  default:
+    name: redis-kafka-wal-lab
